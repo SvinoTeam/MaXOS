@@ -1,131 +1,137 @@
 /* 4/11/26 MaXOS -- VFS (Virtual File System)*/
+/* fully re-writed at 24/11/26*/
 #include "vfs.h"
 #include "printf.h"
 #include "string.h"
 #include "heap.h"
 
 static vfs_file_t *root = NULL;
-static int file_count = 0;
-static vfs_file_t file_pool[VFS_MAX_FILES];
 
+/* soo we just locate `root` var to root_node */
 void vfs_init(void) {
-	/* create root dir */
-	root = &file_pool[file_count++];
-	strcpy(root->name, "/");
-	root->data = NULL;
-	root->size = 0;
-	root->flags = 0755;
-	root->uid = 0;
-	root->gid = 0;
-	root->parent = NULL;
-	root->children = NULL;
-	root->next = NULL;
-	//kprintf("VFS initialized.\n");
-}
-
-
-int vfs_read(const char *path, void *buffer, uint32_t size) {
-	/* read file from dirr */
-    vfs_file_t *root = vfs_get_root();
-    vfs_file_t *file = root->children;
-    while (file) {
-        if (strcmp(file->name, path) == 0) {
-            if (file->data && file->size > 0) {
-                uint32_t bytes_to_copy = (size < file->size) ? size : file->size;
-                memcpy(buffer, file->data, bytes_to_copy);
-                return bytes_to_copy;
-                }
-            return 0;
-        }
-        file = file->next;
-    }
-    return -1; // if file is not found
-}
-
-int vfs_write(const char *path, const void *buffer, uint32_t size) {
-	/* vfs_write is write to memory file via kmalloc(). */
-    if (!path || !buffer || size == 0) return -1;
-    vfs_file_t *root = vfs_get_root();
-    vfs_file_t *file = root->children;
-    while (file) {
-        if (strcmp(file->name, path) == 0) {
-            if (file->data != NULL) {
-                kfree(file->data);
-            }
-            
-            file->data = (uint8_t *)kmalloc(size);
-            if (!file->data) {
-                kprintf("WriteError: out of memory for '%s'\n", path);
-                return -1;
-            }
-            
-            memcpy(file->data, buffer, size);
-            file->size = size;
-            return size;
-        }
-        file = file->next;
-    }
-
-    vfs_file_t *new_file = vfs_create_file(path, 0644, 0, 0); // 0644 = rw-r--r--
-    if (!new_file) {
-        kprintf("WriteError: failed to create file '%s'\n", path);
-        return -1;
-    }
-
-    new_file->data = (uint8_t *)kmalloc(size);
-    if (!new_file->data) {
-        kprintf("WriteError: out of memory for new file '%s'\n", path);
-        return -1;
-    }
-
-    memcpy(new_file->data, buffer, size);
-    new_file->size = size;
-
-    return size; // Ok!
-}
-int vfs_readdir(const char *path, char *buffer, uint32_t buffer_size) {
-	// XXX: at now moment, this function is not created, i'm going to sleep (i'm lazy)
-	return 0;
-	/* read dir (for example, bin/)*/
+	root = &root_node;
 }
 
 vfs_file_t *vfs_get_root(void) {
-    return root;
+	return root;
+}
+
+/* split_path (static,return void)
+* this function just parse path like `etc/passwd` to parent="etc" and name="passwd"
+*/
+
+static void split_path(const char *path, char *parent, char *name) {
+	const char *last_splash = NULL;
+	const char *p = path;
+	while (*p){
+		if (*p == '/') {
+			last_splash=p;
+		}
+		p++;
+	}
+	if (last_splash) {
+		int len = last_splash - path;
+		if (len > 0 && len < VFS_MAX_PATH) {
+			strncpy(parent, path,len);
+			parent[len] = '\0';
+		} else {
+			strcpy(parent, "/");
+		}
+		strcpy(name,last_splash+1);
+	}
+	else {
+		strcpy(parent,"/");
+		strcpy(name,path);
+	}
+}
+
+/* line (like `etc/passwd`) -> structure (in fs_node_t*)*/
+vfs_file_t *vfs_lookup(const char *path) {
+    
+    if (!path || !*path) return NULL;
+    
+    vfs_file_t *node;
+    if (*path == '/') {
+    	node = root;
+    	path++;
+    }
+    else {
+    	node = current_dir;
+    }
+    
+    if (!node) {
+        return NULL;
+    }
+    
+    if (*path == '/') path++;
+    
+    while (*path) {
+        char comp[64];
+        int i = 0;
+        while (*path && *path != '/' && i < 63) comp[i++] = *path++;
+        comp[i] = '\0';
+        
+        if (i == 0) {
+            if (*path == '/') { path++; continue; }
+        }
+        
+        node = find_child(node, comp);
+        if (!node) {
+            return NULL;
+        }
+        
+        if (*path == '/') {
+			path++;
+       	}
+        	
+    }
+    return node;
+}
+
+/* this is alias for backward compatibility*/
+vfs_file_t *vfs_find(const char *path) {
+	return vfs_lookup(path);
+}
+
+int vfs_read(const char *path, void *buffer, uint32_t size) {
+    vfs_file_t *file = vfs_lookup(path);
+    if (!file || file->is_directory) return -1;
+    uint32_t bytes = (size < file->size) ? size : file->size;
+    if (file->data) {
+        memcpy(buffer, file->data, bytes);
+        return bytes;
+    }
+    return 0;
+}
+
+int vfs_write(const char *path, const void *buffer, uint32_t size) {
+    if (!path || !buffer || size == 0) {
+    	return -1;	
+    }
+    vfs_file_t *file = vfs_lookup(path);
+    if (!file) {
+        file = vfs_create_file(path, 0644, 0, 0);
+        if (!file) {
+        	return -1;	
+        }
+    }
+    if (file->data) kfree(file->data);
+    file->data = (uint8_t *)kmalloc(size);
+    if (!file->data) {
+    	return -1;
+    }
+    memcpy(file->data, buffer, size);
+    file->size = size;
+    return size;
 }
 
 vfs_file_t *vfs_create_file(const char *path, uint32_t flags, uint32_t uid, uint32_t gid) {
-	/* create new file */
-    if (file_count >= VFS_MAX_FILES) {
-        kprintf("vfs limit.\n");
-        return NULL;
-    }
-
-    vfs_file_t *file = &file_pool[file_count++];
-    
-    strncpy(file->name, path, VFS_MAX_PATH - 1);
-    file->name[VFS_MAX_PATH - 1] = '\0';
-    
-    file->data = NULL;
-    file->size = 0;
-    file->flags = flags;
-    file->uid = uid;
-    file->gid = gid;
-    file->parent = root;
-    
-    file->next = root->children;
-    root->children = file;
-    
-    return file;
-}
-
-vfs_file_t *vfs_find(const char *path) {
-	vfs_file_t *root = vfs_get_root();
-	vfs_file_t *file = root->children;
-	while (file) {
-		if (strcmp(file->name, path)==0) {
-			return file;
-		}
-		file = file->next;
+	char parent_path[VFS_MAX_PATH];
+	char name[64];
+	split_path(path, parent_path, name);
+	vfs_file_t *parent = vfs_lookup(parent_path);
+	if (!parent) {
+		return NULL;	
 	}
-	return NULL; /* file not found*/
+	return create_file(parent, name); 
 }

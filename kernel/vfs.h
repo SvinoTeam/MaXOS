@@ -5,20 +5,13 @@
 #ifndef VFS_H
 #define VFS_H
 #include "types.h"
+#include "initramfs.h"
 
 #define VFS_MAX_PATH 256
 #define VFS_MAX_FILES 1024
 
-typedef struct vfs_file {
-	char name[VFS_MAX_PATH];
-	uint8_t *data; // ptr to data [for ram] or to NULL [for disk]
-	uint32_t size;
-	uint32_t flags; // access rights
-	uint32_t uid, gid; // owner
-	struct vfs_file *parent;
-	struct vfs_file *children;
-	struct vfs_file *next;
-} vfs_file_t;
+// `fs_node_t` -> from initramfs.h
+typedef fs_node_t vfs_file_t;
 
 /* Initialization VFS*/
 void vfs_init(void);
@@ -34,4 +27,6 @@ vfs_file_t *vfs_create_file(const char *path, uint32_t flags, uint32_t uid, uint
 vfs_file_t *vfs_get_root(void);
 /* find file*/
 vfs_file_t *vfs_find(const char *path);
+/* get file via path (return `NULL` if file not found)*/
+vfs_file_t *vfs_lookup(const char *path);
 #endif

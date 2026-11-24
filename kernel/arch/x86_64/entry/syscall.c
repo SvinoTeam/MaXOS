@@ -1,3 +1,4 @@
+/* ебать я даун */
 #include "syscall.h"
 #include "../../../printf.h"
 #include "../../../console.h"
@@ -7,6 +8,7 @@
 #include "../../../sched/scheduler.h"
 #include "../lib/io.h"
 #include "../../../vfs.h"
+#include "../../../string.h"
 
 extern uint64_t syscall_stack_fault;
 
@@ -57,7 +59,7 @@ uint64_t syscall_dispatch(syscall_regs_t *r) {
 
     case SYS_UPTIME: /* uptime_ms() */
         return uptime_ms();
-	case SYS_OPEN:
+	case SYS_OPEN: {
 		uint64_t u_path = r->rdi;
 		char k_path[256];
 		int i = 0;
@@ -74,7 +76,7 @@ uint64_t syscall_dispatch(syscall_regs_t *r) {
 			i++;
 		}
 		k_path[255] = '\0'; // !!! need null terminator!!!
-		vfs_file_t *file = vfs_find(k_path);
+		vfs_file_t *file = vfs_lookup(k_path);
 		if (!file) {
 			return -1; // enoent: file not found
 		}
@@ -93,6 +95,37 @@ uint64_t syscall_dispatch(syscall_regs_t *r) {
 		}
 		tasks[current_task].fd_table[fd] = file;
 		return fd;
+	}
+	case SYS_CLOSE: {
+		int fd = (int)r->rdi;
+		if (fd<3 || fd >= 16) {
+			return -1;
+		}
+		tasks[current_task].fd_table[fd] = NULL;
+		return 0;
+	}
+	case SYS_READ: {
+		int fd = (int)r->rdi;
+		uint64_t buf = r->rsi;
+		uint64_t count = r->rdx;
+		kprintf("sys_read: fd=%d, buf=x%lx, count=%lu\n", fd,(unsigned long)buf, (unsigned long)count);
+		if (fd < 3 || fd >= 16) {
+			return -1;
+		}
+		vfs_file_t *file = tasks[current_task].fd_table[fd];
+		if (!file || file->is_directory) {
+			return -1;
+		}
+		if (!user_range_ok(buf,count)) {
+			return -1; // efault
+		}
+		uint64_t bytes = (count < file->size) ? count : file->size;
+		if (file->data) {
+		    memcpy((void *)(uintptr_t)buf, file->data, bytes);
+		}
+		kprintf("sys_read: -> bytes=%lu\n", (unsigned long)bytes);
+		return bytes;
+	}
     case SYS_GETCHAR: /* getchar(), -1 if empty */
         return kbd_avail() ? (uint64_t)(int64_t)kbd_getchar() : SYSCALL_ERR;
     case SYS_EXIT: { /* exit(int code) */

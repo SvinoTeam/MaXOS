@@ -8,6 +8,8 @@
 %define SYS_GETCHAR  5      ; ()                       -> symbol or -1
 %define SYS_EXIT     60     ; (int code)               -> not ret
 %define SYS_OPEN     10     ; та соси
+%define SYS_CLOSE    11     ; ну
+%define SYS_READ     12     ; ты ахуел чи що
 
 %macro syscall_do 1
     mov eax, %1
