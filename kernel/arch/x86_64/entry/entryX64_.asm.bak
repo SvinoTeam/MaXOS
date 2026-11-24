@@ -1,0 +1,183 @@
+; entryX64_.asm - MaXOS
+; Purpose: ring0 (kernel) <-> ring3 (user) context switching.
+;   1) enter_usermode_asm()      - enter ring 3
+;   2) syscall_handler           - kernel entry via SYSCALL (MSR IA32_LSTAR)
+;   3) syscall_return_to_kernel() - return from ring 3 to kernel (SYS_EXIT)
+; Note: MSR init (EFER.SCE / STAR / LSTAR / SFMASK) lives in ../lib/msr.c
+;       C syscall dispatcher lives in syscall.c
+;       ABI description in doc/x86_64/syscall.md
+
+BITS 64
+
+extern syscall_dispatch
+;extern syscall_stack_top
+extern kernel_rsp0
+
+global enter_usermode_asm
+global syscall_handler
+global syscall_return_to_handler
+global maxos_user_rsp
+global syscall_stack_fault
+
+; Segment selectors (see boot/stage2.asm -> gdt_base):
+; 0x00 null | 0x08 code32 | 0x10 data32 | 0x18 code64 | 0x20 data64
+; 0x28 user_data64 (DPL3) | 0x30 user_code64 (DPL3) | 0x38 TSS
+KERNEL_CS equ 0x18
+KERNEL_DS equ 0x20
+USER_DS   equ 0x2B   ; 0x28 | RPL 3
+USER_CS   equ 0x33   ; 0x30 | RPL 3
+
+section .text
+
+enter_usermode_asm:
+	push rbx
+	push rbp
+	push r12
+	push r13
+	push r14
+	push r15
+	lea  rax, [rel .resume]
+	mov  [rel kctx_rsp], rsp
+	mov  [rel kctx_rip], rax
+	cli
+	mov  ax, USER_DS
+	mov  ds, ax
+	mov  es, ax
+	mov  fs, ax
+	mov  gs, ax
+	push qword USER_DS ; ss
+	push rsi ; rsp
+	push qword 0x202 ; rflags: if = 1 + reserved bit1
+	push qword USER_CS ; cs
+	push rdi ; rip
+	iretq
+.resume:
+	pop  r15
+	pop  r14
+	pop  r13
+	pop  r12
+	pop  rbp
+	pop  rbx	
+	ret
+
+; SYSCALL entry point - this label's address is written to MSR IA32_LSTAR.
+;
+; On SYSCALL from ring 3 the CPU does:
+;   RCX    <- user RIP
+;   R11    <- user RFLAGS
+;   RFLAGS <- RFLAGS & ~IA32_SFMASK   (IF cleared)
+;   CS     <- IA32_STAR[47:32]        (0x18, kernel code64)
+;   SS     <- IA32_STAR[47:32] + 8    (0x20, kernel data64)
+;   RIP    <- IA32_LSTAR
+;   RSP is NOT switched - still on the user stack.
+;   DS/ES/FS/GS are NOT changed (DS/ES base is forced to 0 in long mode).
+;
+; System V ABI (AMD64) (Linux):
+;   RAX = syscall number, args 1..6 = RDI, RSI, RDX, R10, R8, R9
+;   (RCX is clobbered by SYSCALL itself)
+;   result returned in RAX.
+align 16
+syscall_handler:
+    ; Switch to the kernel stack; the user stack would otherwise be used
+    ; for pushes and could fault or leak.
+    mov   [rel maxos_user_rsp], rsp
+    ;mov  rsp, [rel syscall_stack_top]
+	mov   rsp, [rel kernel_rsp0]
+	test  rsp, rsp
+	jnz   .stack_ok
+	; kernel_rsp0 == 0 -> TSS or scheduler err
+	; DO NOT TRIPLE FAULT!!! Call panic(); in C (At now moment just call emergency stack)
+	lea   rsp, [rel emergency_stack_top]
+	mov   qword [abs sycall_stack_fault], 1
+.stack_ok:
+    ; Save all registers into syscall_regs_t (order must match struct in syscall.h).
+    push qword [rel maxos_user_rsp] ; -> syscall_regs_t.user_rsp
+    push  r15
+    push  r14
+    push  r13
+    push  r12
+    push  r11
+    push  r10
+    push  r9
+    push  r8
+    push  rbp
+    push  rcx
+    push  rbx
+    push  rdx
+    push  rsi
+    push  rdi
+    push  rax
+
+    ; Align stack to 16 bytes (System V ABI); gcc may emit movaps otherwise.
+    mov  rbp, rsp
+    and  rsp, -16
+    mov  rdi, rbp ; syscall_regs_t *r 
+    sti
+    call syscall_dispatch
+    cli
+    ;mov  rdi, rbp
+    ;call syscall_dispatch
+	mov  rsp, rbp
+	mov  [rsp], rax
+    pop  rax
+    pop  rdi
+    pop  rsi
+    pop  rdx
+    pop  rbx
+    pop  rcx                  ; user RIP (needed by SYSRET)
+    pop  rbp
+    pop  r8
+    pop  r9
+    pop  r10
+    pop  r11                  ; user RFLAGS (needed by SYSRET)
+    pop  r12
+    pop  r13
+    pop  r14
+    pop  r15
+
+    ; Restore the user stack; SYSRET loads RFLAGS from R11, so no need to STI.
+    mov  rsp, [rsp]
+    o64 sysret
+    ; SYSRET: RIP <- RCX, RFLAGS <- R11,
+    ;         CS  <- IA32_STAR[63:48]+16 (0x33 | RPL3)
+    ;         SS  <- IA32_STAR[63:48]+8  (0x2B | RPL3)
+
+; void syscall_return_to_kernel(uint64_t exit_code);   __attribute__((noreturn))
+syscall_return_to_kernel:
+    mov  r10, [rel kctx_rsp]
+    test r10, r10
+    jz   .kill_task
+
+    ; it's legacy bro (return to enter_usermode_asm.resume)
+    mov  r11, [rel kctx_rip]
+    mov  qword [rel kctx_rsp], 0
+    mov  qword [rel kctx_rip], 0
+    mov  rsp, r10
+    mov  rax, rdi
+    push rax
+    mov  ax, KERNEL_DS
+    mov  ds, ax
+    mov  es, ax
+    mov  fs, ax
+    mov  gs, ax
+    pop  rax
+    sti
+    jmp  r11
+
+.kill_task:
+    ; rdi = exit_code -> task_exit(int) mark ZOMBIE and call schedule()
+    call task_exit
+    ud2 ; if zombie returned, call ud2 for kernel panic
+
+section .bss
+align 16
+kctx_rsp:            resq 1
+kctx_rip:            resq 1
+maxos_user_rsp:      resq 1
+syscall_stack_fault: resq 1
+
+align 16
+emergency_stack:     resb 4096
+emergency_stack_top:
+
+section .note.GNU-stack noalloc noexec nowrite progbits
