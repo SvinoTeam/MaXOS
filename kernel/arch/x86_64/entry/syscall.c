@@ -9,6 +9,7 @@
 #include "../lib/io.h"
 #include "../../../vfs.h"
 #include "../../../string.h"
+#include "../../../heap.h"
 
 extern uint64_t syscall_stack_fault;
 
@@ -96,6 +97,41 @@ uint64_t syscall_dispatch(syscall_regs_t *r) {
 		tasks[current_task].fd_table[fd] = file;
 		return fd;
 	}
+	case SYS_FWRITE: {
+		int fd = (int)r->rdi;
+		uint64_t buf = r->rsi;
+		uint64_t count = r->rdx;
+		kprintf("sys_fwrite fd=%d, buf=0x%lx count=%lu\n",fd,(unsigned long)buf, (unsigned long)count);
+		if (fd < 3 || fd >= 16) {
+			return -1;
+		}
+		vfs_file_t *file = tasks[current_task].fd_table[fd];
+		if (!file || file ->is_directory) {
+			return -1;
+		}
+		if (!user_range_ok(buf, count)) {
+			kprintf("KernelError[Sys_fwrite]: bad user buf\n");
+			return -1;
+		}
+		/* old memory will be clean*/
+		if (file->data) {
+			kfree(file->data);	
+		}
+		/* malloc some memory*/
+		file->data = kmalloc(count);
+		if (!file->data) {
+			kprintf("KernelError[Sys_fwrite]: kmalloc failed");
+			return -1;
+		}
+		/* copy data
+        *  from: user buff
+        *  to: kernel
+		*/
+		memcpy(file->data, (void *)(uintptr_t)buf,count);
+		file->size = count;
+		kprintf("Sys_fwrite: wrote %lu bytes to '%s'\n", (unsigned long)count, file->name);
+		return count;
+	}
 	case SYS_CLOSE: {
 		int fd = (int)r->rdi;
 		if (fd<3 || fd >= 16) {
@@ -108,7 +144,7 @@ uint64_t syscall_dispatch(syscall_regs_t *r) {
 		int fd = (int)r->rdi;
 		uint64_t buf = r->rsi;
 		uint64_t count = r->rdx;
-		kprintf("sys_read: fd=%d, buf=x%lx, count=%lu\n", fd,(unsigned long)buf, (unsigned long)count);
+		//kprintf("sys_read: fd=%d, buf=x%lx, count=%lu\n", fd,(unsigned long)buf, (unsigned long)count);
 		if (fd < 3 || fd >= 16) {
 			return -1;
 		}
@@ -123,7 +159,7 @@ uint64_t syscall_dispatch(syscall_regs_t *r) {
 		if (file->data) {
 		    memcpy((void *)(uintptr_t)buf, file->data, bytes);
 		}
-		kprintf("sys_read: -> bytes=%lu\n", (unsigned long)bytes);
+		//kprintf("sys_read: -> bytes=%lu\n", (unsigned long)bytes);
 		return bytes;
 	}
     case SYS_GETCHAR: /* getchar(), -1 if empty */

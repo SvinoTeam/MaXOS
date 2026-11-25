@@ -20,8 +20,11 @@ for src in "$SCRIPT_DIR"/*.asm; do
     $ASM -f elf64 -I "$SCRIPT_DIR" "$src" -o "$SCRIPT_DIR/${name}.o"
     echo "ASM build done!"
 
-    $LD -Ttext 0x0 -o "$SCRIPT_DIR/${name}.bin" "$SCRIPT_DIR/${name}.o"
-    $LD --oformat binary -Ttext 0x0 -o "$SCRIPT_DIR/${name}.raw" "$SCRIPT_DIR/${name}.o"
+    # Use an explicit flat-image layout. -Ttext alone leaves .data/.bss in
+    # separate page-aligned segments; --oformat binary can then place their
+    # bytes at the wrong offsets relative to the relocated code references.
+    $LD -T "$SCRIPT_DIR/max.ld" -o "$SCRIPT_DIR/${name}.bin" "$SCRIPT_DIR/${name}.o"
+    $LD -T "$SCRIPT_DIR/max.ld" --oformat binary -o "$SCRIPT_DIR/${name}.raw" "$SCRIPT_DIR/${name}.o"
     echo "LD  linking done!"
 
     size=$(stat -c%s "$SCRIPT_DIR/${name}.raw")

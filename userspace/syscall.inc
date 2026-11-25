@@ -10,6 +10,7 @@
 %define SYS_OPEN     10     ; та соси
 %define SYS_CLOSE    11     ; ну
 %define SYS_READ     12     ; ты ахуел чи що
+%define SYS_FWRITE   13     ; иди нахуй
 
 %macro syscall_do 1
     mov eax, %1

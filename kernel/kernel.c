@@ -35,10 +35,6 @@ void idle_task_func(void) {
 
 void kmain(void) {
     const boot_info_t *bi = (const boot_info_t *)(uintptr_t)BOOTINFO_ADDR;
-	console_init(bi);
-	if (!console_ready()) {
-	    panic("Cannot init console :(");
-	}
 	pmm_init(128 * 1024 * 1024);
 	pmm_mark_region(0x100000, 0x100000);
 	//first: protect initramfs
@@ -64,6 +60,11 @@ void kmain(void) {
     } else {
         panic("Initramfs is too small to be valid.");
     }
+    kprintf("Welcome to MaXOS.\nScanning all `ATA` devices\n");
+	console_init(bi);
+	if (!console_ready()) {
+	    panic("Cannot init console");
+	}
     heap_init();
     ata_init();
     ext2_scan_all();

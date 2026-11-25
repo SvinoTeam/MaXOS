@@ -63,11 +63,11 @@ void ata_init(void) {
                 model[i+1] = buf[27 + i/2] & 0xFF;
             }
             model[40] = 0;
-            kprintf("Drive %d detected, model %s\n", drive, model);
+            kprintf("Drive %d detected, model %s \033[32mOK\033[0m\n", drive, model);
             drives_present[drive] = 1;
             drive_count++;
         } else {
-            kprintf("Drive %d: not found\n", drive);
+            kprintf("Drive %d: not found\t\t\t\t\t\t \033[33mWRN\033[0m\n", drive);
         }
     }
     if (drive_count == 0) {
