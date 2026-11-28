@@ -1,6 +1,6 @@
 # MaXOS
 
-**MaXOS** -- an open-source operating system
+**MaXOS** -- an open-source operating system (CC0)
 
 Created by github.com/lev445.
 
@@ -82,4 +82,4 @@ After build, you can find `os.img` in root-project folder.
 
 You may use the MaXOS code for both educational purposes and for creating a fork. 
 
-License: MIT.
+License: CC0.
